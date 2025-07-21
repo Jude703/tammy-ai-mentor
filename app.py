@@ -13,6 +13,7 @@ nltk.download("vader_lexicon")
 client = OpenAI()
 
 
+
 st.set_page_config(page_title="Tammy — AI Mentor", layout="wide")
 
 
@@ -30,18 +31,18 @@ def load_embeddings_from_folder(folder_path):
     return embeddings
 
 def get_top_chunks(user_question, all_chunks, top_n=5):
-
+   
     response = client.embeddings.create(
         model="text-embedding-3-small",
         input=user_question
     )
     question_vector = np.array(response.data[0].embedding).reshape(1, -1)
 
- 
+   
     chunk_vectors = np.array([chunk["embedding"] for chunk in all_chunks])
     similarities = cosine_similarity(question_vector, chunk_vectors)[0]
 
-
+  
     top_indices = np.argsort(similarities)[::-1][:top_n]
     top_chunks = [all_chunks[i] for i in top_indices]
 
@@ -80,38 +81,38 @@ You are Tammy, an AI Mentor for business founders. You are clear, compassionate,
 st.title(" Tammy — AI Mentor")
 
 
-tab1, tab2 = st.tabs([" conversation", "list of questions"])
+tab1, tab2 = st.tabs(["Chat", "Question Record"])
 
 with tab1:
-    user_input = st.text_input("what is on your mind?", placeholder="how to use egg method in my business؟")
+    user_input = st.text_input("What's on your mind?", placeholder="Write here whatever you're thinking")
     if user_input:
         sentiment = analyze_sentiment(user_input)
-        st.write(f"sentiment analysis `{sentiment}`")
+        st.write(f"Sentiment Analysis:`{sentiment}`")
 
-        with st.spinner("Tammy thinks deeply"):
-            chunks = load_embeddings_from_folder("cleaned_embeddings_new")
+        with st.spinner("Tammy is thinking deeply..."):
+            chunks = load_embeddings_from_folder("tammy-ai-mentor")
             top_chunks = get_top_chunks(user_input, chunks, top_n=5)
             response = generate_tammy_response(user_input, top_chunks, sentiment)
 
-            st.markdown("Tammy responds:")
+            st.markdown("### Tammy's response:")
             st.write(response)
 
-          
+            
             if "history" not in st.session_state:
                 st.session_state.history = []
             st.session_state.history.append({"q": user_input, "a": response})
 
 with tab2:
-    st.markdown("### questions list ")
+    st.markdown("###Question Record:")
     if "history" in st.session_state:
         for entry in st.session_state.history[::-1]:
             st.markdown(f"**Q:** {entry['q']}")
             st.markdown(f"**A:** {entry['a']}")
             st.markdown("---")
     else:
-        st.info("no questions yet")
+        st.info("No questions yet")
 
 
-st.sidebar.markdown("future settings")
-st.sidebar.checkbox("activate long term memory (Memory)", value=False, help="it will be activated in the future.")
+st.sidebar.markdown("future settings ")
+st.sidebar.checkbox("Activate Long-Term Memory (Memory)", value=False, help=" for saving user interactions between sessions")
 
