@@ -2,117 +2,76 @@ import streamlit as st
 import os
 import json
 import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
-from nltk.sentiment import SentimentIntensityAnalyzer
+import pandas as pd
 import nltk
+from nltk.sentiment import SentimentIntensityAnalyzer
+from sklearn.metrics.pairwise import cosine_similarity
 from openai import OpenAI
 
+# تنزيل ملفات المشاعر
 nltk.download("vader_lexicon")
 
-client = OpenAI()
+# إعداد واجهة OpenAI
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-EMBEDDINGS_DIR = "cleaned_embeddings_new"
-MEMORY_FILE = "tammy_memory.json"
-PERSONA_FILE = "tammy_prompt.txt"
+# تحميل ملفات embeddings
+st.title("🔍 AI Answer Generator with Smart Memory")
 
-@st.cache_data
-def load_all_chunks_with_embeddings(directory):
-    chunks = []
-    embeddings = []
-    for filename in os.listdir(directory):
-        if filename.endswith(".json"):
-            with open(os.path.join(directory, filename), "r", encoding="utf-8") as f:
-                try:
-                    data = json.load(f)
-                    if isinstance(data, list):
-                        for chunk in data:
-                            if "embedding" in chunk:
-                                chunks.append(chunk)
-                                embeddings.append(chunk["embedding"])
-                except json.JSONDecodeError:
-                    continue
-    return chunks, np.array(embeddings)
+uploaded_file = st.file_uploader("Upload your embeddings JSON file", type="json")
 
-def get_embedding(text):
-    response = client.embeddings.create(
-        input=text,
-        model="text-embedding-3-small"
-    )
-    return response.data[0].embedding
+if uploaded_file is not None:
+    embeddings_data = json.load(uploaded_file)
+    texts = [item["text"] for item in embeddings_data]
+    vectors = np.array([item["embedding"] for item in embeddings_data])
 
-def search_chunks(query, all_chunks, all_embeddings, top_k=10):
-    query_emb = get_embedding(query)
-    similarities = cosine_similarity([query_emb], all_embeddings)[0]
-    ranked = sorted(zip(similarities, all_chunks), key=lambda x: x[0], reverse=True)
-    top_chunks = [entry[1] for entry in ranked[:top_k]]
-    return top_chunks
+    question = st.text_input("Ask your question:")
 
-def detect_tone(text):
-    sia = SentimentIntensityAnalyzer()
-    score = sia.polarity_scores(text)["compound"]
-    if score >= 0.5:
-        return "positive"
-    elif score <= -0.5:
-        return "negative"
-    else:
-        return "neutral"
+    if question:
+        # توليد embedding للسؤال
+        with st.spinner("Generating embedding and searching..."):
+            question_embedding = client.embeddings.create(
+                model="text-embedding-3-small",
+                input=question
+            ).data[0].embedding
 
-def load_memory():
-    if os.path.exists(MEMORY_FILE):
-        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return []
+            similarities = cosine_similarity(
+                [question_embedding],
+                vectors
+            )[0]
 
-def save_memory(memory):
-    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(memory, f, ensure_ascii=False, indent=2)
+            top_indices = similarities.argsort()[::-1][:5]
+            top_chunks = [embeddings_data[i] for i in top_indices]
 
-def load_persona_prompt():
-    with open(PERSONA_FILE, "r", encoding="utf-8") as f:
-        return f.read().strip()
+            # عرض أفضل 5 نتائج
+            st.subheader("🔎 Top 5 relevant chunks:")
+            for i, chunk in enumerate(top_chunks, 1):
+                st.markdown(f"**{i}.** `{chunk.get('chunk_title', 'No title')}` — Score: {similarities[top_indices[i-1]]:.4f}")
+                st.write(chunk["text"])
+                st.markdown("---")
 
-def generate_response(memory, persona, context_chunks, tone, new_question):
-    context = "\n\n".join([chunk["chunk_content"] for chunk in context_chunks])
-    history = "\n\n".join([f"User: {turn['question']}\nTammy: {turn['answer']}" for turn in memory])
-    system_message = f"{persona}\n\nContext:\n{context}\n\nConversation History:\n{history}"
+            # توليد الرد النهائي
+            context = "\n\n".join([chunk["text"] for chunk in top_chunks])
 
-    tone_prefix = {
-        "positive": "Great energy! Let's build on that.",
-        "negative": "Thanks for trusting me. I'm here with you.",
-        "neutral": "Let's tackle this together step by step."
-    }
+            system_msg = "You are Tammy, a clarity-driven and kind AI mentor. Answer based only on the provided context below."
 
-    messages = [
-        {"role": "system", "content": system_message},
-        {"role": "user", "content": f"{tone_prefix[tone]}\n\nQuestion: {new_question}"}
-    ]
+            messages = [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {question}"}
+            ]
 
-    response = client.chat.completions.create(
-        model="gpt-4",
-        messages=messages,
-        temperature=0.4
-    )
+            response = client.chat.completions.create(
+                model="gpt-4",
+                messages=messages
+            )
 
-    return response.choices[0].message.content
+            final_answer = response.choices[0].message.content
 
-# Load all data once
-all_chunks, all_embeddings = load_all_chunks_with_embeddings(EMBEDDINGS_DIR)
-persona_prompt = load_persona_prompt()
-memory_data = load_memory()
+            # تحليل المشاعر
+            sia = SentimentIntensityAnalyzer()
+            sentiment = sia.polarity_scores(final_answer)
 
-st.title("Tammy – Your AI Mentor")
+            st.subheader("🧠 Tammy's Answer")
+            st.write(final_answer)
 
-user_question = st.text_input("What would you like to ask Tammy?")
-
-if st.button("Ask Tammy"):
-    if user_question.strip() == "":
-        st.warning("Please enter a question.")
-    else:
-        with st.spinner("Thinking..."):
-            tone = detect_tone(user_question)
-            top_chunks = search_chunks(user_question, all_chunks, all_embeddings)
-            answer = generate_response(memory_data, persona_prompt, top_chunks, tone, user_question)
-            memory_data.append({"question": user_question, "answer": answer})
-            save_memory(memory_data)
-        st.success("Tammy's Response:")
-        st.write(answer)
+            st.subheader("💬 Sentiment Analysis")
+            st.json(sentiment)
