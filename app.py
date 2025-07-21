@@ -9,7 +9,6 @@ from openai import OpenAI
 
 nltk.download("vader_lexicon")
 
-# ✅ تهيئة عميل OpenAI
 client = OpenAI()
 
 EMBEDDINGS_DIR = "cleaned_embeddings_new"
@@ -17,18 +16,22 @@ MEMORY_FILE = "tammy_memory.json"
 PERSONA_FILE = "tammy_prompt.txt"
 
 @st.cache_data
-def load_all_chunks(directory):
+def load_all_chunks_with_embeddings(directory):
     chunks = []
+    embeddings = []
     for filename in os.listdir(directory):
         if filename.endswith(".json"):
             with open(os.path.join(directory, filename), "r", encoding="utf-8") as f:
                 try:
                     data = json.load(f)
                     if isinstance(data, list):
-                        chunks.extend(data)
+                        for chunk in data:
+                            if "embedding" in chunk:
+                                chunks.append(chunk)
+                                embeddings.append(chunk["embedding"])
                 except json.JSONDecodeError:
                     continue
-    return chunks
+    return chunks, np.array(embeddings)
 
 def get_embedding(text):
     response = client.embeddings.create(
@@ -37,10 +40,9 @@ def get_embedding(text):
     )
     return response.data[0].embedding
 
-def search_chunks(query, top_k=10):
+def search_chunks(query, all_chunks, all_embeddings, top_k=10):
     query_emb = get_embedding(query)
-    chunk_embeddings = [chunk["embedding"] for chunk in all_chunks if "embedding" in chunk]
-    similarities = cosine_similarity([query_emb], chunk_embeddings)[0]
+    similarities = cosine_similarity([query_emb], all_embeddings)[0]
     ranked = sorted(zip(similarities, all_chunks), key=lambda x: x[0], reverse=True)
     top_chunks = [entry[1] for entry in ranked[:top_k]]
     return top_chunks
@@ -93,12 +95,11 @@ def generate_response(memory, persona, context_chunks, tone, new_question):
 
     return response.choices[0].message.content
 
-# ✅ تحميل كل البيانات عند تشغيل التطبيق
-all_chunks = load_all_chunks(EMBEDDINGS_DIR)
+# Load all data once
+all_chunks, all_embeddings = load_all_chunks_with_embeddings(EMBEDDINGS_DIR)
 persona_prompt = load_persona_prompt()
 memory_data = load_memory()
 
-# ✅ واجهة ستريملت
 st.title("Tammy – Your AI Mentor")
 
 user_question = st.text_input("What would you like to ask Tammy?")
@@ -109,7 +110,7 @@ if st.button("Ask Tammy"):
     else:
         with st.spinner("Thinking..."):
             tone = detect_tone(user_question)
-            top_chunks = search_chunks(user_question)
+            top_chunks = search_chunks(user_question, all_chunks, all_embeddings)
             answer = generate_response(memory_data, persona_prompt, top_chunks, tone, user_question)
             memory_data.append({"question": user_question, "answer": answer})
             save_memory(memory_data)
