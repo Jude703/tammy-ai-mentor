@@ -5,11 +5,12 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from nltk.sentiment import SentimentIntensityAnalyzer
 import nltk
-import openai
+from openai import OpenAI
 
 nltk.download("vader_lexicon")
 
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+# ✅ تهيئة عميل OpenAI
+client = OpenAI()
 
 EMBEDDINGS_DIR = "cleaned_embeddings_new"
 MEMORY_FILE = "tammy_memory.json"
@@ -30,11 +31,11 @@ def load_all_chunks(directory):
     return chunks
 
 def get_embedding(text):
-    response = openai.Embedding.create(
+    response = client.embeddings.create(
         input=text,
         model="text-embedding-3-small"
     )
-    return response["data"][0]["embedding"]
+    return response.data[0].embedding
 
 def search_chunks(query, top_k=10):
     query_emb = get_embedding(query)
@@ -84,18 +85,20 @@ def generate_response(memory, persona, context_chunks, tone, new_question):
         {"role": "user", "content": f"{tone_prefix[tone]}\n\nQuestion: {new_question}"}
     ]
 
-    response = openai.ChatCompletion.create(
+    response = client.chat.completions.create(
         model="gpt-4",
         messages=messages,
         temperature=0.4
     )
 
-    return response["choices"][0]["message"]["content"]
+    return response.choices[0].message.content
 
+# ✅ تحميل كل البيانات عند تشغيل التطبيق
 all_chunks = load_all_chunks(EMBEDDINGS_DIR)
 persona_prompt = load_persona_prompt()
 memory_data = load_memory()
 
+# ✅ واجهة ستريملت
 st.title("Tammy – Your AI Mentor")
 
 user_question = st.text_input("What would you like to ask Tammy?")
