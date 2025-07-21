@@ -90,7 +90,7 @@ with tab1:
         st.write(f"Sentiment Analysis:`{sentiment}`")
 
         with st.spinner("Tammy is thinking deeply..."):
-            chunks = load_embeddings_from_folder("tammy-ai-mentor")
+            chunks = load_embeddings_from_folder("cleaned_embeddings_new")
             top_chunks = get_top_chunks(user_input, chunks, top_n=5)
             response = generate_tammy_response(user_input, top_chunks, sentiment)
 
