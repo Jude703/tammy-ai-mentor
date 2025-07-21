@@ -1,4 +1,3 @@
-##
 import streamlit as st
 import os
 import json
@@ -6,11 +5,11 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 from nltk.sentiment import SentimentIntensityAnalyzer
 import nltk
-from openai import OpenAI
+import openai
 
 nltk.download("vader_lexicon")
 
-client = OpenAI()
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 
 EMBEDDINGS_DIR = "cleaned_embeddings_new"
 MEMORY_FILE = "tammy_memory.json"
@@ -31,11 +30,11 @@ def load_all_chunks(directory):
     return chunks
 
 def get_embedding(text):
-    response = client.embeddings.create(
+    response = openai.Embedding.create(
         input=text,
         model="text-embedding-3-small"
     )
-    return response.data[0].embedding
+    return response["data"][0]["embedding"]
 
 def search_chunks(query, top_k=10):
     query_emb = get_embedding(query)
@@ -85,13 +84,13 @@ def generate_response(memory, persona, context_chunks, tone, new_question):
         {"role": "user", "content": f"{tone_prefix[tone]}\n\nQuestion: {new_question}"}
     ]
 
-    response = client.chat.completions.create(
+    response = openai.ChatCompletion.create(
         model="gpt-4",
         messages=messages,
         temperature=0.4
     )
 
-    return response.choices[0].message.content
+    return response["choices"][0]["message"]["content"]
 
 all_chunks = load_all_chunks(EMBEDDINGS_DIR)
 persona_prompt = load_persona_prompt()
