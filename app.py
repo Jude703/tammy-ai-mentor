@@ -3,77 +3,115 @@ import os
 import json
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
-from openai import OpenAI
-from nltk.sentiment import SentimentIntensityAnalyzer
 import nltk
+from nltk.sentiment import SentimentIntensityAnalyzer
+from openai import OpenAI
 
 nltk.download("vader_lexicon")
-sia = SentimentIntensityAnalyzer()
+
 
 client = OpenAI()
 
-st.set_page_config(page_title="Tammy - AI Mentor", page_icon="🤖")
-st.title("Tammy: Your AI Mentor")
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+st.set_page_config(page_title="Tammy — AI Mentor", layout="wide")
 
-uploaded_embeddings = st.file_uploader("Upload your embeddings JSON file", type=["json"])
 
-if uploaded_embeddings:
-    embeddings_data = json.load(uploaded_embeddings)
-    texts = [item["text"] for item in embeddings_data]
-    vectors = [item["embedding"] for item in embeddings_data]
+sentiment_analyzer = SentimentIntensityAnalyzer()
 
-    st.success("Embeddings loaded successfully.")
 
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+@st.cache_data
+def load_embeddings_from_folder(folder_path):
+    embeddings = []
+    for filename in os.listdir(folder_path):
+        if filename.endswith(".json"):
+            with open(os.path.join(folder_path, filename), "r", encoding="utf-8") as f:
+                data = json.load(f)
+                embeddings.extend(data)
+    return embeddings
 
-    user_input = st.chat_input("Ask Tammy anything")
+def get_top_chunks(user_question, all_chunks, top_n=5):
 
+    response = client.embeddings.create(
+        model="text-embedding-3-small",
+        input=user_question
+    )
+    question_vector = np.array(response.data[0].embedding).reshape(1, -1)
+
+ 
+    chunk_vectors = np.array([chunk["embedding"] for chunk in all_chunks])
+    similarities = cosine_similarity(question_vector, chunk_vectors)[0]
+
+
+    top_indices = np.argsort(similarities)[::-1][:top_n]
+    top_chunks = [all_chunks[i] for i in top_indices]
+
+    return top_chunks
+
+def analyze_sentiment(text):
+    scores = sentiment_analyzer.polarity_scores(text)
+    if scores["compound"] >= 0.5:
+        return "positive"
+    elif scores["compound"] <= -0.5:
+        return "negative"
+    else:
+        return "neutral"
+
+def generate_tammy_response(user_question, retrieved_chunks, sentiment_label):
+    context = "\n---\n".join([chunk["text"] for chunk in retrieved_chunks])
+
+    system_prompt = f"""
+You are Tammy, an AI Mentor for business founders. You are clear, compassionate, strategic, and insightful. You always speak with warmth and honesty. Use the following context to answer. Prioritize clarity, emotional intelligence, and tactical value. Keep your answer grounded in the files of Tammy (Instructions, Toolkits, Integration, Check-in Templates). Sentiment of the user input: {sentiment_label}.
+"""
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_question},
+    ]
+
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=messages,
+        temperature=0.7
+    )
+
+    return response.choices[0].message.content.strip()
+
+
+st.title(" Tammy — AI Mentor")
+
+
+tab1, tab2 = st.tabs([" conversation", "list of questions"])
+
+with tab1:
+    user_input = st.text_input("what is on your mind?", placeholder="how to use egg method in my business؟")
     if user_input:
-        with st.chat_message("user"):
-            st.markdown(user_input)
-        st.session_state.messages.append({"role": "user", "content": user_input})
+        sentiment = analyze_sentiment(user_input)
+        st.write(f"sentiment analysis `{sentiment}`")
 
-        sentiment = sia.polarity_scores(user_input)["compound"]
-        mood = "curious" if sentiment > 0.05 else "neutral" if sentiment > -0.05 else "concerned"
+        with st.spinner("Tammy thinks deeply"):
+            chunks = load_embeddings_from_folder("cleaned_embeddings_new")
+            top_chunks = get_top_chunks(user_input, chunks, top_n=5)
+            response = generate_tammy_response(user_input, top_chunks, sentiment)
 
-        with st.spinner("Thinking..."):
-            user_embedding = client.embeddings.create(
-                input=user_input,
-                model="text-embedding-3-small"
-            ).data[0].embedding
+            st.markdown("Tammy responds:")
+            st.write(response)
 
-            similarities = cosine_similarity([user_embedding], vectors)[0]
-            top_indices = np.argsort(similarities)[-5:][::-1]
-            top_chunks = [texts[i] for i in top_indices]
+          
+            if "history" not in st.session_state:
+                st.session_state.history = []
+            st.session_state.history.append({"q": user_input, "a": response})
 
-            persona = (
-                "You are Tammy, an AI mentor for business. You are sharp, empathetic, and always help the user gain clarity. "
-                "Your tone is confident, warm, and honest. If a question is vague or seems exploratory, respond with curiosity. "
-                "If something is missing from your knowledge base, acknowledge it honestly and invite the user to clarify what they seek. "
-                "You speak with insight and encouragement, helping people uncover what really matters and move forward with clarity. "
-                f"The user's current mood appears to be {mood}. Respond accordingly."
-            )
+with tab2:
+    st.markdown("### questions list ")
+    if "history" in st.session_state:
+        for entry in st.session_state.history[::-1]:
+            st.markdown(f"**Q:** {entry['q']}")
+            st.markdown(f"**A:** {entry['a']}")
+            st.markdown("---")
+    else:
+        st.info("no questions yet")
 
-            system_msg = {"role": "system", "content": persona}
-            history_msgs = [{"role": m["role"], "content": m["content"]} for m in st.session_state.messages[-5:]]
-            context_msg = {"role": "user", "content": "Here are relevant excerpts from the knowledge base:\n\n" + "\n\n".join(top_chunks)}
-            final_question = {"role": "user", "content": user_input}
 
-            full_prompt = [system_msg] + history_msgs + [context_msg, final_question]
+st.sidebar.markdown("future settings")
+st.sidebar.checkbox("activate long term memory (Memory)", value=False, help="it will be activated in the future.")
 
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=full_prompt,
-                temperature=0.7
-            )
-
-            assistant_reply = response.choices[0].message.content.strip()
-
-        with st.chat_message("assistant"):
-            st.markdown(assistant_reply)
-        st.session_state.messages.append({"role": "assistant", "content": assistant_reply})
